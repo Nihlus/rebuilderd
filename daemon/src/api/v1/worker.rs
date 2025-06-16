@@ -55,7 +55,7 @@ pub async fn register_worker(
     request: web::Json<RegisterWorkerRequest>,
 ) -> web::Result<impl Responder> {
     let mut connection = pool.get().map_err(Error::from)?;
-    if auth::worker(&cfg, &req, connection.as_mut()).is_err() {
+    if auth::signup(&cfg, &req).is_err() {
         return Ok(HttpResponse::Forbidden().finish());
     }
 
