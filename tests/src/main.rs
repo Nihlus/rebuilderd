@@ -7,7 +7,8 @@ use rebuilderd::config::Config;
 use rebuilderd_common::api::v1::{
     ArtifactStatus, BinaryPackage, BinaryPackageReport, BuildRestApi, BuildStatus, JobAssignment,
     PackageReport, PackageRestApi, PopQueuedJobRequest, QueueJobRequest, QueueRestApi,
-    RebuildArtifactReport, RebuildReport, SourcePackageReport,
+    RebuildArtifactReport, RebuildReport, RegisterWorkerRequest, SourcePackageReport,
+    WorkerRestApi,
 };
 use rebuilderd_common::api::Client;
 use rebuilderd_common::config::*;
@@ -112,6 +113,7 @@ async fn main() -> Result<()> {
 
     config.auth.cookie = Some(args.cookie.clone());
     config.http.bind_addr = Some(addr.clone());
+    config.worker.signup_secret = Some("fake-signup-key".to_string());
     config.endpoints.insert(
         endpoint.clone(),
         EndpointConfig {
@@ -120,7 +122,7 @@ async fn main() -> Result<()> {
     );
 
     if !args.no_daemon {
-        let config = rebuilderd::config::from_struct(config.clone(), args.cookie)?;
+        let config = rebuilderd::config::from_struct(config.clone(), args.cookie.clone())?;
 
         let tmp_dir = TempDir::new()?;
         info!("Changing cwd to {:?}", tmp_dir);
@@ -135,6 +137,8 @@ async fn main() -> Result<()> {
 
     info!("Setting up client for {:?}", endpoint);
     let mut client = Client::new(config.clone(), Some(endpoint))?;
+    client.auth_cookie(args.cookie.clone());
+    client.signup_secret("fake-signup-key");
     client.worker_key("worker1"); // TODO: this is not a proper key
 
     test("Testing database to be empty", async {
@@ -142,6 +146,17 @@ async fn main() -> Result<()> {
         if !pkgs.is_empty() {
             bail!("Database is not empty");
         }
+        Ok(())
+    })
+    .await?;
+
+    test("Testing worker signup", async {
+        client
+            .register_worker(RegisterWorkerRequest {
+                name: "test-worker".to_string(),
+            })
+            .await?;
+
         Ok(())
     })
     .await?;
