@@ -1,7 +1,5 @@
 use crate::schema::*;
 use diesel::prelude::*;
-#[cfg(feature = "v0")]
-use rebuilderd_common::api::v0::{PkgArtifact, PkgGroup};
 use rebuilderd_common::errors::*;
 
 #[derive(Identifiable, Queryable, Selectable, AsChangeset, Clone, PartialEq, Eq, Debug)]

@@ -16,7 +16,11 @@ use diesel::{OptionalExtension, QueryDsl, RunQueryDsl};
 use rebuilderd_common::api::v1::{IdentityFilter, OriginFilter, PackageReport, Page, ResultPage};
 use rebuilderd_common::errors::Error;
 
-diesel::alias!(crate::schema::rebuilds as r1: RebuildsAlias1, crate::schema::rebuilds as r2: RebuildsAlias2);
+use aliases::*;
+
+mod aliases {
+    diesel::alias!(crate::schema::rebuilds as r1: RebuildsAlias1, crate::schema::rebuilds as r2: RebuildsAlias2);
+}
 
 #[diesel::dsl::auto_type]
 fn source_packages_base() -> _ {

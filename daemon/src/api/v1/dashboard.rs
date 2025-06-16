@@ -12,7 +12,11 @@ use diesel::{BoolExpressionMethods, JoinOnDsl, QueryDsl};
 use rebuilderd_common::api::v1::{DashboardState, OriginFilter, QueuedJob};
 use rebuilderd_common::errors::Error;
 
-diesel::alias!(crate::schema::rebuilds as r1: RebuildsAlias1, crate::schema::rebuilds as r2: RebuildsAlias2);
+use aliases::*;
+
+mod aliases {
+    diesel::alias!(crate::schema::rebuilds as r1: RebuildsAlias1, crate::schema::rebuilds as r2: RebuildsAlias2);
+}
 
 #[get("")]
 pub async fn get_dashboard(
