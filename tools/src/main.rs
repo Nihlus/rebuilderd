@@ -375,6 +375,7 @@ async fn main() -> Result<()> {
                     name: Some(push.name),
                     version: push.version,
                     architecture: push.architecture,
+                    status: None, // TODO: push.status
                     priority: Some(push.priority),
                 })
                 .await?;

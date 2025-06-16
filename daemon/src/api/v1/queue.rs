@@ -14,8 +14,8 @@ use diesel::BoolExpressionMethods;
 use diesel::{Connection, OptionalExtension, QueryDsl, RunQueryDsl};
 use diesel::{ExpressionMethods, JoinOnDsl};
 use rebuilderd_common::api::v1::{
-    IdentityFilter, JobAssignment, OriginFilter, Page, PopQueuedJobRequest, QueueJobRequest,
-    QueuedJob, QueuedJobArtifact, QueuedJobWithArtifacts, ResultPage,
+    BuildStatus, IdentityFilter, JobAssignment, OriginFilter, Page, PopQueuedJobRequest,
+    QueueJobRequest, QueuedJob, QueuedJobArtifact, QueuedJobWithArtifacts, ResultPage,
 };
 use rebuilderd_common::errors::Error;
 
@@ -119,6 +119,14 @@ pub async fn request_rebuild(
     }
 
     sql = identity_filter.filter(sql, source_packages::name, source_packages::version);
+
+    if let Some(status) = queue_request.status {
+        if status == BuildStatus::Unknown {
+            sql = sql.filter(rebuilds::status.is_null());
+        } else {
+            sql = sql.filter(rebuilds::status.eq(status));
+        }
+    }
 
     let build_input_ids = sql
         .get_results::<i32>(connection.as_mut())
