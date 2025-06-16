@@ -171,7 +171,7 @@ CREATE TABLE _workers_new
     online    BOOLEAN  NOT NULL
 );
 
-CREATE UNIQUE INDEX workers_unique_idx ON workers (key);
+CREATE UNIQUE INDEX workers_unique_idx ON _workers_new (key);
 
 INSERT INTO _workers_new(id, name, key, address, status, last_ping, online)
 SELECT id, '', key, addr, status, last_ping, online
