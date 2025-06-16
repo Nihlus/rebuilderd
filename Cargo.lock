@@ -1954,6 +1954,7 @@ name = "rebuilderd-tests"
 version = "0.23.1"
 dependencies = [
  "actix-web",
+ "chrono",
  "clap",
  "colored",
  "env_logger",

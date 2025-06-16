@@ -1,9 +1,15 @@
 use crate::args::Args;
+use chrono::Utc;
 use clap::Parser;
 use colored::Colorize;
 use env_logger::Env;
 use rebuilderd::config::Config;
-use rebuilderd_common::api::v0::*;
+use rebuilderd_common::api::v1::{
+    ArtifactStatus, BinaryPackage, BinaryPackageReport, BuildRestApi, BuildStatus, JobAssignment,
+    PackageReport, PackageRestApi, PopQueuedJobRequest, QueueJobRequest, QueueRestApi,
+    RebuildArtifactReport, RebuildReport, SourcePackageReport,
+};
+use rebuilderd_common::api::Client;
 use rebuilderd_common::config::*;
 use rebuilderd_common::errors::*;
 use std::io;
@@ -15,16 +21,11 @@ use tempfile::TempDir;
 
 mod args;
 
-async fn list_pkgs(client: &Client) -> Result<Vec<PkgRelease>> {
+async fn list_pkgs(client: &Client) -> Result<Vec<BinaryPackage>> {
     client
-        .list_pkgs(&ListPkgs {
-            name: None,
-            status: None,
-            distro: None,
-            suite: None,
-            architecture: None,
-        })
+        .get_binary_packages(None, None, None)
         .await
+        .map(|p| p.records)
 }
 
 async fn initial_import(client: &Client) -> Result<()> {
@@ -34,28 +35,26 @@ async fn initial_import(client: &Client) -> Result<()> {
 
     let url = "https://mirrors.kernel.org/archlinux/core/os/x86_64/zstd-1.4.5-1-x86_64.pkg.tar.zst"
         .to_string();
-    let mut group = PkgGroup::new(
-        "pkgbase".to_string(),
-        "1.4.5-1".to_string(),
-        distro.clone(),
-        suite.clone(),
-        architecture.clone(),
-        None,
-    );
-    group.add_artifact(PkgArtifact {
-        name: "zstd".to_string(),
-        version: "1.4.5-1".to_string(),
-        url,
-    });
-    let pkgs = vec![group];
 
-    client
-        .sync_suite(&SuiteImport {
-            distro,
-            suite,
-            groups: pkgs,
-        })
-        .await?;
+    let report = PackageReport {
+        distribution: distro.clone(),
+        release: None, // TODO
+        component: Some(suite.clone()),
+        architecture: architecture.clone(),
+        packages: vec![SourcePackageReport {
+            name: "pkgbase".to_string(),
+            version: "1.4.5-1".to_string(),
+            url: url.clone(),
+            artifacts: vec![BinaryPackageReport {
+                name: "zstd".to_string(),
+                version: "1.4.5-1".to_string(),
+                architecture: architecture.clone(),
+                url,
+            }],
+        }],
+    };
+
+    client.submit_package_report(&report).await?;
 
     Ok(())
 }
@@ -149,8 +148,10 @@ async fn main() -> Result<()> {
 
     test("Testing there is nothing to do", async {
         let task = client
-            .pop_queue(&WorkQuery {
+            .request_work(PopQueuedJobRequest {
                 supported_backends: vec!["archlinux".to_string()],
+                architecture: std::env::consts::ARCH.to_string(),
+                supported_architectures: vec![std::env::consts::ARCH.to_string()],
             })
             .await?;
 
@@ -190,12 +191,8 @@ async fn main() -> Result<()> {
             bail!("Mismatch name");
         }
 
-        if pkg.status != Status::Unknown {
+        if pkg.status.unwrap_or(ArtifactStatus::Unknown) != ArtifactStatus::Unknown {
             bail!("Status not UNKWN");
-        }
-
-        if pkg.built_at.is_some() {
-            bail!("Not None: built_at");
         }
 
         if !pkgs.is_empty() {
@@ -208,8 +205,10 @@ async fn main() -> Result<()> {
 
     test("Fetching task and reporting BAD rebuild", async {
         let task = client
-            .pop_queue(&WorkQuery {
+            .request_work(PopQueuedJobRequest {
                 supported_backends: vec!["archlinux".to_string()],
+                architecture: std::env::consts::ARCH.to_string(),
+                supported_architectures: vec![std::env::consts::ARCH.to_string()],
             })
             .await?;
 
@@ -218,24 +217,25 @@ async fn main() -> Result<()> {
             _ => bail!("Expected a job assignment"),
         };
 
-        let mut rebuilds = Vec::new();
-        for artifact in queue.pkgbase.artifacts.clone() {
-            rebuilds.push((
-                artifact,
-                Rebuild {
-                    diffoscope: None,
-                    status: BuildStatus::Bad,
-                    attestation: None,
-                },
-            ));
+        let mut artifacts = Vec::new();
+        for artifact in queue.artifacts.clone() {
+            artifacts.push(RebuildArtifactReport {
+                name: artifact.name.clone(),
+                diffoscope: None,
+                status: ArtifactStatus::Bad,
+                attestation: None,
+            });
         }
 
-        let report = BuildReport {
-            queue,
-            build_log: String::new(),
-            rebuilds,
+        let report = RebuildReport {
+            queue_id: queue.job.id,
+            built_at: Utc::now().naive_utc(),
+            build_log: String::new().into_bytes(),
+            status: BuildStatus::Bad,
+            artifacts,
         };
-        client.report_build(&report).await?;
+
+        client.submit_build_report(report).await?;
 
         Ok(())
     })
@@ -246,12 +246,8 @@ async fn main() -> Result<()> {
 
         let pkg = pkgs.pop().ok_or_else(|| format_err!("No pkgs found"))?;
 
-        if pkg.status != Status::Bad {
+        if pkg.status.unwrap_or(ArtifactStatus::Unknown) != ArtifactStatus::Bad {
             bail!("Unexpected pkg status");
-        }
-
-        if pkg.built_at.is_none() {
-            bail!("Unexpected none: built_at");
         }
 
         Ok(())
@@ -260,14 +256,15 @@ async fn main() -> Result<()> {
 
     test("Requeueing BAD pkgs", async {
         client
-            .requeue_pkgs(&RequeueQuery {
+            .request_rebuild(QueueJobRequest {
+                distribution: None,
+                release: None,
+                component: None,
                 name: None,
-                status: Some(Status::Bad),
-                priority: 2,
-                distro: None,
-                suite: None,
+                version: None,
                 architecture: None,
-                reset: false,
+                status: Some(BuildStatus::Bad),
+                priority: Some(2),
             })
             .await?;
 
@@ -280,12 +277,8 @@ async fn main() -> Result<()> {
 
         let pkg = pkgs.pop().ok_or_else(|| format_err!("No pkgs found"))?;
 
-        if pkg.status != Status::Bad {
+        if pkg.status.unwrap_or(ArtifactStatus::Unknown) != ArtifactStatus::Bad {
             bail!("Unexpected pkg status");
-        }
-
-        if pkg.built_at.is_none() {
-            bail!("Unexpected none: built_at");
         }
 
         Ok(())
@@ -294,8 +287,10 @@ async fn main() -> Result<()> {
 
     test("Fetching task and reporting GOOD rebuild", async {
         let task = client
-            .pop_queue(&WorkQuery {
+            .request_work(PopQueuedJobRequest {
                 supported_backends: vec!["archlinux".to_string()],
+                architecture: std::env::consts::ARCH.to_string(),
+                supported_architectures: vec![std::env::consts::ARCH.to_string()],
             })
             .await?;
 
@@ -304,24 +299,25 @@ async fn main() -> Result<()> {
             _ => bail!("Expected a job assignment"),
         };
 
-        let mut rebuilds = Vec::new();
-        for artifact in queue.pkgbase.artifacts.clone() {
-            rebuilds.push((
-                artifact,
-                Rebuild {
-                    diffoscope: None,
-                    status: BuildStatus::Good,
-                    attestation: None,
-                },
-            ));
+        let mut artifacts = Vec::new();
+        for artifact in queue.artifacts.clone() {
+            artifacts.push(RebuildArtifactReport {
+                name: artifact.name.clone(),
+                diffoscope: None,
+                status: ArtifactStatus::Good,
+                attestation: None,
+            });
         }
 
-        let report = BuildReport {
-            queue,
-            build_log: String::new(),
-            rebuilds,
+        let report = RebuildReport {
+            queue_id: queue.job.id,
+            built_at: Utc::now().naive_utc(),
+            build_log: String::new().into_bytes(),
+            status: BuildStatus::Good,
+            artifacts,
         };
-        client.report_build(&report).await?;
+
+        client.submit_build_report(report).await?;
 
         Ok(())
     })
@@ -332,12 +328,8 @@ async fn main() -> Result<()> {
 
         let pkg = pkgs.pop().ok_or_else(|| format_err!("No pkgs found"))?;
 
-        if pkg.status != Status::Good {
+        if pkg.status.unwrap_or(ArtifactStatus::Unknown) != ArtifactStatus::Good {
             bail!("Unexpected pkg status");
-        }
-
-        if pkg.built_at.is_none() {
-            bail!("Unexpected none: built_at");
         }
 
         Ok(())
@@ -349,32 +341,33 @@ async fn main() -> Result<()> {
         let suite = "main".to_string();
         let architecture = "x86_64".to_string();
 
-        let mut group = PkgGroup::new(
-            "hello-world".to_string(),
-            "1.2.3-4".to_string(),
-            distro.clone(),
-            suite.clone(),
-            architecture.clone(),
-            Some("https://example.com/hello-world-1.2.3-4.buildinfo.txt".to_string()),
-        );
-        group.add_artifact(PkgArtifact {
-            name: "foo".to_string(),
-            version: "0.1.2".to_string(),
-            url: "https://example.com/foo-0.1.2.tar.zst".to_string(),
-        });
-        group.add_artifact(PkgArtifact {
-            name: "bar".to_string(),
-            version: "0.3.4".to_string(),
-            url: "https://example.com/bar-0.3.4.tar.zst".to_string(),
-        });
+        let report = PackageReport {
+            distribution: distro.clone(),
+            release: None,
+            component: Some(suite.clone()),
+            architecture: architecture.clone(),
+            packages: vec![SourcePackageReport {
+                name: "hello-world".to_string(),
+                version: "1.2.3-4".to_string(),
+                url: "https://example.com/hello-world-1.2.3-4.buildinfo.txt".to_string(),
+                artifacts: vec![
+                    BinaryPackageReport {
+                        name: "foo".to_string(),
+                        version: "0.1.2".to_string(),
+                        architecture: architecture.clone(),
+                        url: "https://example.com/foo-0.1.2.tar.zst".to_string(),
+                    },
+                    BinaryPackageReport {
+                        name: "bar".to_string(),
+                        version: "0.3.4".to_string(),
+                        architecture: architecture.clone(),
+                        url: "https://example.com/bar-0.3.4.tar.zst".to_string(),
+                    },
+                ],
+            }],
+        };
 
-        client
-            .sync_suite(&SuiteImport {
-                distro,
-                suite,
-                groups: vec![group],
-            })
-            .await?;
+        client.submit_package_report(&report).await?;
 
         Ok(())
     })
