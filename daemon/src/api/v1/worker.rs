@@ -199,10 +199,17 @@ pub async fn set_worker_tags(
             })
             .collect::<Result<Vec<WorkerTag>, _>>()?;
 
+        // clean up unused tags
+        delete(
+            tags::table
+                .filter(tags::id.ne_all(worker_tags::table.select(worker_tags::tag_id).distinct())),
+        )
+        .execute(conn)?;
+
         Ok::<(), Error>(())
     })?;
 
-    Ok(HttpResponse::NotImplemented().finish())
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[put("/{id}/tags/{tag}")]
