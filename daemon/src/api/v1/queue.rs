@@ -379,7 +379,8 @@ fn get_eligible_job(
 
         Ok(Some(QueuedJobWithArtifacts { job, artifacts }))
     } else {
-        // TODO: offer untagged work to a worker with tags if no tagged work was available?
+        // TODO: offer untagged work to a worker with tags if no tagged work was available? Solve by adding a catch-all
+        // rule to workers which should also accept untagged work?
         Ok(None)
     }
 }
