@@ -199,13 +199,6 @@ pub async fn set_worker_tags(
             })
             .collect::<Result<Vec<WorkerTag>, _>>()?;
 
-        // clean up unused tags
-        delete(
-            tags::table
-                .filter(tags::id.ne_all(worker_tags::table.select(worker_tags::tag_id).distinct())),
-        )
-        .execute(conn)?;
-
         Ok::<(), Error>(())
     })?;
 
@@ -283,13 +276,6 @@ pub async fn delete_worker_tag(
             worker_tags::table
                 .filter(worker_tags::worker_id.eq(worker_id))
                 .filter(worker_tags::tag_id.eq(tag_id.unwrap())),
-        )
-        .execute(conn)?;
-
-        // clean up unused tags
-        delete(
-            tags::table
-                .filter(tags::id.ne_all(worker_tags::table.select(worker_tags::tag_id).distinct())),
         )
         .execute(conn)?;
 
